@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Local temporary image caches & user photos (CRITICAL: NEVER commit user photos!)
+temp_images/
+temp_images_test/
+*.preview.jpg
+/tmp/sig_*.bmp
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables & local logs
+.env
+*.log

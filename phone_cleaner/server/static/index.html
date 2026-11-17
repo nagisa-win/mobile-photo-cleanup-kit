@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📱 手机相册缩略图与重复图片对比清理 - Web 控制台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    [v-cloak] { display: none; }
+    .glassmorphism {
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    .img-zoom:hover {
+      transform: scale(1.02);
+      transition: transform 0.2s ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen font-sans antialiased">
+  <div id="app" v-cloak class="pb-36">
+
+    <!-- 顶部常驻导航与控制中心 -->
+    <header class="sticky top-0 z-40 glassmorphism border-b border-slate-200/90 shadow-sm">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 py-2 flex items-center justify-between gap-4">
+        <!-- Logo 与系统状态 -->
+        <div class="flex items-center space-x-3.5">
+          <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/25 shrink-0">
+            <i class="fa-solid fa-mobile-screen-button text-xl"></i>
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <h1 class="text-base sm:text-lg font-bold text-slate-900 tracking-tight">手机相册对比清理</h1>
+              <!-- ADB 状态徽章 -->
+              <span 
+                v-if="adbConnected" 
+                class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>ADB 在线: {{ currentDevice }}</span>
+              </span>
+              <span 
+                v-else 
+                class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300">
+                <span class="w-2 h-2 rounded-full bg-rose-500"></span>
+                <span>未连接设备</span>
+              </span>
+            </div>
+            <p class="text-xs text-slate-500 hidden sm:block">
+              Web-First 控制台 · 视觉像素指纹比对 · 严格保护独立同名相片
+            </p>
+          </div>
+        </div>
+
+        <!-- 顶部核心操作按钮组 -->
+        <div class="flex items-center space-x-2.5">
+          <!-- 一键重新扫描按钮 -->
+          <button 
+            @click="openScanModal" 
+            :disabled="scanStatus.is_scanning"
+            class="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold text-white shadow-sm transition-all flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-blue-500/20 active:scale-95 disabled:opacity-50">
+            <i class="fa-solid fa-arrows-rotate" :class="{ 'fa-spin': scanStatus.is_scanning }"></i>
+            <span>{{ scanStatus.is_scanning ? '正在扫描中...' : '重新扫描手机' }}</span>
+          </button>
+
+          <!-- 刷新数据按钮 -->
+          <button 
+            @click="fetchData" 
+            class="p-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 transition text-sm"
+            title="刷新数据缓存">
+            <i class="fa-solid fa-rotate-right"></i>
+          </button>
+
+          <!-- 提交删除悬浮入口 -->
+          <button 
+            @click="openDeleteModal"
+            :disabled="selectedCount === 0 || isDeleting"
+            class="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold text-white shadow-md transition-all flex items-center space-x-2"
+            :class="selectedCount > 0 ? 'bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-rose-500/20 active:scale-95' : 'bg-slate-300 cursor-not-allowed text-slate-500'">
+            <i class="fa-solid fa-trash-can"></i>
+            <span>删除选中 ({{ selectedCount }}项 · {{ selectedSizeStr }})</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 统计指标卡片条 -->
+      <div class="bg-white/80 border-t border-slate-200/70 py-2.5 px-4 sm:px-6 lg:px-8">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+            <div><span class="text-slate-500">对比组数:</span> <span class="font-bold text-slate-900">{{ summary.total_groups || 0 }} 组</span></div>
+            <div><span class="text-slate-500">对比文件:</span> <span class="font-bold text-slate-900">{{ summary.total_files || 0 }} 张</span></div>
+            <div class="flex items-center space-x-1">
+              <span class="text-slate-500">独立相片保护:</span> 
+              <span class="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                <i class="fa-solid fa-shield mr-1"></i>{{ summary.protected_files || 0 }} 张 (同名不同图)
+              </span>
+            </div>
+            <div><span class="text-slate-500">当前勾选待删:</span> <span class="font-bold text-rose-600">{{ selectedCount }} 张</span></div>
+            <div><span class="text-slate-500">预计释放手机空间:</span> <span class="font-bold text-rose-600">{{ selectedSizeStr }}</span></div>
+          </div>
+
+          <!-- 快速选择操作 -->
+          <div class="flex items-center space-x-2">
+            <button @click="resetToRecommended" class="px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100 font-medium transition" title="仅勾选视觉相似度>=88%的真实缩略图">
+              <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>恢复推荐勾选
+            </button>
+            <button @click="selectAllThumbnails" class="px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 hover:bg-rose-100 font-medium transition">
+              <i class="fa-solid fa-check-double mr-1"></i>全选所有确认缩略图
+            </button>
+            <button @click="invertSelection" class="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 font-medium transition">
+              <i class="fa-solid fa-arrows-rotate mr-1"></i>反选
+            </button>
+            <button @click="deselectAll" class="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 font-medium transition">
+              <i class="fa-solid fa-xmark mr-1"></i>全部清空
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主体区域 -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+
+      <!-- 分类标签过滤器与搜索框 -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <!-- 标签过滤器 -->
+        <div class="flex flex-wrap items-center gap-2">
+          <button 
+            v-for="tab in filterTabs" 
+            :key="tab.id"
+            @click="activeTab = tab.id"
+            class="px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center space-x-1.5"
+            :class="activeTab === tab.id ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'">
+            <i v-if="tab.icon" :class="tab.icon" class="text-[11px]"></i>
+            <span>{{ tab.name }} ({{ tab.count }})</span>
+          </button>
+        </div>
+
+        <!-- 搜索框 -->
+        <div class="relative w-full md:w-80">
+          <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+          <input 
+            v-model="searchQuery" 
+            type="text" 
+            placeholder="搜索时间戳、文件名或路径..."
+            class="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+          >
+        </div>
+      </div>
+
+      <!-- 加载提示 -->
+      <div v-if="loading" class="text-center py-28 bg-white rounded-2xl border border-slate-200 shadow-sm">
+        <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-600 mb-4"></i>
+        <p class="text-slate-700 text-sm font-semibold">正在加载手机相册对比数据...</p>
+        <p class="text-slate-400 text-xs mt-1">若首次运行，请点击右上角【重新扫描手机】按钮</p>
+      </div>
+
+      <!-- 无数据提示 -->
+      <div v-else-if="filteredGroups.length === 0" class="text-center py-24 bg-white rounded-2xl border border-slate-200 shadow-sm space-y-4">
+        <div class="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto text-2xl">
+          <i class="fa-regular fa-images"></i>
+        </div>
+        <div>
+          <h3 class="text-base font-bold text-slate-800">暂无符合条件的图片对比组</h3>
+          <p class="text-xs text-slate-500 mt-1">你的手机相册非常干净，或搜索过滤条件未匹配到结果</p>
+        </div>
+        <div class="flex items-center justify-center gap-3 pt-2">
+          <button @click="resetFilters" class="px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-700 hover:bg-slate-50">
+            重置筛选条件
+          </button>
+          <button @click="openScanModal" class="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-500 shadow-sm">
+            <i class="fa-solid fa-arrows-rotate mr-1"></i>重新扫描手机相册
+          </button>
+        </div>
+      </div>
+
+      <!-- 对比组列表 -->
+      <div v-else class="space-y-8">
+        <div 
+          v-for="group in filteredGroups" 
+          :key="group.timestamp" 
+          class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:border-slate-300">
+          
+          <!-- 组标题栏 -->
+          <div class="bg-slate-50/90 px-6 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center space-x-3">
+              <span class="w-3 h-3 rounded-full" :class="group.has_different_content ? 'bg-blue-500' : 'bg-rose-500'"></span>
+              <span class="font-mono font-bold text-base text-slate-900 tracking-wide">
+                IMG_{{ group.timestamp }}
+              </span>
+              <span class="text-xs text-slate-500 font-medium">
+                {{ group.formatted_date }}
+              </span>
+              <!-- 组属性徽章 -->
+              <div class="flex items-center space-x-1.5">
+                <span 
+                  v-for="badge in group.badges" 
+                  :key="badge.name"
+                  class="px-2.5 py-0.5 rounded text-[11px] font-semibold"
+                  :class="getBadgeClass(badge.color)">
+                  {{ badge.name }}
+                </span>
+              </div>
+            </div>
+
+            <!-- 组快捷操作 -->
+            <div class="flex items-center space-x-2 text-xs">
+              <button 
+                @click="selectGroupThumbnails(group)" 
+                class="text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-2.5 py-1 rounded-lg transition font-medium">
+                仅勾选此组缩略图
+              </button>
+              <button 
+                @click="selectGroupAll(group)" 
+                class="text-slate-600 hover:text-slate-800 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition font-medium">
+                全选本组
+              </button>
+              <button 
+                @click="deselectGroupAll(group)" 
+                class="text-slate-500 hover:text-slate-700 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition font-medium">
+                取消本组
+              </button>
+            </div>
+          </div>
+
+          <!-- 图片卡片对比网格 (宽松多列布局，拒绝文字折行) -->
+          <div class="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div 
+              v-for="file in group.files" 
+              :key="file.id"
+              class="relative rounded-2xl border-2 transition-all p-4 flex flex-col justify-between"
+              :class="[
+                file.deleted ? 'bg-slate-50 opacity-60 border-dashed border-slate-300' :
+                file.selected ? 'bg-rose-50/40 border-rose-500 shadow-md ring-1 ring-rose-500/20' : 
+                file.role === 'original' ? 'bg-emerald-50/30 border-emerald-400' :
+                file.role === 'independent' ? 'bg-blue-50/25 border-blue-300 hover:border-blue-400' :
+                'bg-slate-50/60 border-slate-200 hover:border-slate-300'
+              ]">
+
+              <!-- 卡片头部：角色标签 + 删除状态/复选框 (单行横向排版，绝不折行) -->
+              <div class="flex items-center justify-between pb-3 border-b border-slate-200/80 gap-2">
+                <!-- 角色标签与相似度 -->
+                <div class="flex items-center gap-2 min-w-0">
+                  <span 
+                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 shadow-xs"
+                    :class="getRoleTagClass(file.role)">
+                    <i :class="getRoleIcon(file.role)" class="text-[11px]"></i>
+                    <span>{{ file.tag_short || file.tag }}</span>
+                  </span>
+
+                  <!-- 视觉匹配度 -->
+                  <span 
+                    v-if="file.role !== 'original'"
+                    class="text-[11px] font-bold px-2 py-0.5 rounded-md whitespace-nowrap shrink-0"
+                    :class="file.is_same_image ? 'bg-rose-100/80 text-rose-700 border border-rose-200' : 'bg-blue-100/80 text-blue-700 border border-blue-200'">
+                    匹配: {{ file.similarity_str }}
+                  </span>
+                </div>
+
+                <!-- 右侧删除状态或复选框 -->
+                <div class="shrink-0 flex items-center">
+                  <span 
+                    v-if="file.deleted" 
+                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-200 text-slate-600 whitespace-nowrap">
+                    <i class="fa-solid fa-check text-[10px]"></i>已在手机删除
+                  </span>
+                  <label 
+                    v-else 
+                    class="flex items-center gap-2 cursor-pointer select-none px-2.5 py-1 rounded-lg transition"
+                    :class="file.selected ? 'bg-rose-100 text-rose-800' : 'hover:bg-slate-100 text-slate-600'">
+                    <input 
+                      type="checkbox" 
+                      v-model="file.selected" 
+                      class="w-4 h-4 text-rose-600 rounded border-slate-300 focus:ring-rose-500 accent-rose-600 cursor-pointer"
+                    >
+                    <span class="text-xs font-bold">
+                      {{ file.selected ? '勾选删除' : '保留' }}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- 图片预览区 -->
+              <div 
+                @click="openLightbox(file, group)" 
+                class="relative aspect-[4/3] rounded-xl overflow-hidden bg-slate-100 cursor-pointer group my-3 border border-slate-200/90 shadow-inner">
+                <img 
+                  :src="file.preview_url" 
+                  :alt="file.filename"
+                  loading="lazy"
+                  class="w-full h-full object-contain bg-slate-900/5 img-zoom"
+                >
+                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2 text-white">
+                  <span class="text-xs bg-black/75 px-3 py-1.5 rounded-lg backdrop-blur-sm font-medium">
+                    <i class="fa-solid fa-magnifying-glass-plus mr-1"></i>点击大图核验
+                  </span>
+                </div>
+              </div>
+
+              <!-- 基础参数元数据 -->
+              <div class="space-y-2 text-xs">
+                <div class="grid grid-cols-2 gap-2 text-slate-600 bg-white p-2.5 rounded-xl border border-slate-200/70">
+                  <div>
+                    <span class="text-slate-400 block text-[11px]">分辨率</span>
+                    <span class="font-mono font-bold text-slate-800">{{ file.resolution_str }}</span>
+                  </div>
+                  <div>
+                    <span class="text-slate-400 block text-[11px]">文件体积</span>
+                    <span class="font-mono font-bold" :class="file.role === 'original' ? 'text-emerald-700' : 'text-slate-800'">
+                      {{ file.size_str }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 判定原因描述 -->
+                <div class="text-[11px] text-slate-500 leading-relaxed px-1">
+                  <span class="font-medium text-slate-600">判定依据:</span> {{ file.reason }}
+                </div>
+
+                <!-- 🌟 完整手机真实文件路径 (必须完全显示，绝对不截断) 🌟 -->
+                <div class="pt-1">
+                  <div class="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+                    <div class="flex items-center justify-between text-slate-500 text-[11px] mb-1.5 font-medium">
+                      <span class="flex items-center gap-1.5">
+                        <i class="fa-solid fa-folder-tree text-indigo-500"></i>
+                        <span>手机真实完整存储路径:</span>
+                      </span>
+                      <button 
+                        @click.stop="copyPath(file.phone_path)" 
+                        class="text-blue-600 hover:text-blue-800 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-blue-50 transition"
+                        title="复制路径到剪贴板">
+                        <i class="fa-regular fa-copy text-[11px]"></i>
+                        <span>复制</span>
+                      </button>
+                    </div>
+                    <div class="font-mono text-slate-800 text-[11.5px] leading-relaxed break-all select-all bg-white p-2 rounded-lg border border-slate-200/80 shadow-inner">
+                      {{ file.phone_path }}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+
+    <!-- 底部常驻悬浮栏 -->
+    <div class="fixed bottom-0 left-0 right-0 glassmorphism border-t border-slate-200/90 py-4 px-6 z-30 shadow-2xl">
+      <div class="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center space-x-4">
+          <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl shadow-inner border border-rose-200 shrink-0">
+            <i class="fa-solid fa-trash-can"></i>
+          </div>
+          <div>
+            <div class="text-sm font-bold text-slate-900 flex items-center space-x-2">
+              <span>当前已勾选待删除:</span>
+              <span class="text-rose-600 text-lg font-extrabold">{{ selectedCount }} 张真实文件</span>
+              <span class="text-slate-400">/ 共 {{ summary.total_files || 0 }} 张</span>
+            </div>
+            <p class="text-xs text-slate-500">
+              提交后将直接调用 ADB 从手机内置存储物理删除，释放约 <span class="font-bold text-rose-600">{{ selectedSizeStr }}</span>。
+            </p>
+          </div>
+        </div>
+
+        <div class="flex items-center space-x-3">
+          <button 
+            @click="resetToRecommended" 
+            class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-100 transition">
+            重置为系统推荐
+          </button>
+          <button 
+            @click="openDeleteModal"
+            :disabled="selectedCount === 0 || isDeleting"
+            class="px-6 py-2.5 rounded-xl text-sm font-bold text-white shadow-lg transition-all flex items-center space-x-2"
+            :class="selectedCount > 0 ? 'bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-rose-500/25 active:scale-98' : 'bg-slate-300 cursor-not-allowed'">
+            <i class="fa-solid fa-trash"></i>
+            <span>提交删除所选文件 ({{ selectedCount }} 项)</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 1: Web-First 手机扫描控制弹窗 -->
+    <div v-if="scanModal.show" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
+      <div class="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
+        <!-- 弹窗头 -->
+        <div class="p-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white flex items-center justify-between">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-lg backdrop-blur-sm">
+              <i class="fa-solid fa-mobile-screen-button"></i>
+            </div>
+            <div>
+              <h2 class="text-base font-bold">扫描手机内置存储图片</h2>
+              <p class="text-xs text-blue-100">自动检测全盘照片，识别同时间戳重复与缩略图衍生文件</p>
+            </div>
+          </div>
+          <button v-if="!scanStatus.is_scanning" @click="scanModal.show = false" class="text-white/80 hover:text-white">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <!-- 内容区域 -->
+        <div class="p-6 space-y-5">
+          <!-- 正在扫描时实时进度展示 -->
+          <div v-if="scanStatus.is_scanning" class="py-4 space-y-4">
+            <div class="flex items-center justify-between text-xs font-bold text-slate-800">
+              <span class="flex items-center space-x-2">
+                <i class="fa-solid fa-circle-notch fa-spin text-blue-600 text-sm"></i>
+                <span>{{ scanStatus.step_text }}</span>
+              </span>
+              <span class="font-mono text-blue-600 text-sm">{{ scanStatus.progress }}%</span>
+            </div>
+            <div class="w-full bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
+              <div class="bg-gradient-to-r from-blue-600 to-indigo-600 h-3 rounded-full transition-all duration-300" :style="{ width: scanStatus.progress + '%' }"></div>
+            </div>
+            <p class="text-xs font-mono text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200/80 break-all">
+              {{ scanStatus.message }}
+            </p>
+          </div>
+
+          <!-- 扫描前配置表单 -->
+          <div v-else class="space-y-4">
+            <div class="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+              <div class="text-xs font-bold text-slate-700">扫描设置:</div>
+              <label class="flex items-center space-x-2.5 text-xs text-slate-700 cursor-pointer">
+                <input type="checkbox" v-model="scanModal.cleanCache" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                <span>清空本机临时拉取的旧图片缓存（重新全量拷贝与分析）</span>
+              </label>
+              <div class="pt-2 flex items-center justify-between text-xs">
+                <span class="text-slate-600">视觉指纹相似度阈值:</span>
+                <span class="font-mono font-bold text-blue-600">{{ scanModal.threshold }}</span>
+              </div>
+              <input type="range" v-model.number="scanModal.threshold" min="0.80" max="0.98" step="0.02" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer">
+              <p class="text-[11px] text-slate-400">
+                提示：相似度高于此阈值判定为同一张图的缩略图/衍生图；低于此阈值一律判定为独立相片严禁误删。
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 弹窗底部操作 -->
+        <div class="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end space-x-3">
+          <button 
+            v-if="!scanStatus.is_scanning" 
+            @click="scanModal.show = false" 
+            class="px-4 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition">
+            关闭
+          </button>
+          <button 
+            v-if="!scanStatus.is_scanning" 
+            @click="triggerScan" 
+            class="px-5 py-2 rounded-xl text-xs font-bold text-white shadow-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-blue-500/20 transition">
+            <i class="fa-solid fa-play mr-1.5"></i>开始全量扫描
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 2: 双图细节对比 Lightbox Modal -->
+    <div v-if="lightbox.show" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+      <div class="relative w-full max-w-6xl max-h-[92vh] bg-slate-900 rounded-3xl overflow-hidden shadow-2xl flex flex-col border border-slate-700">
+        <div class="p-4 bg-slate-800/90 border-b border-slate-700 flex items-center justify-between text-white">
+          <div class="flex items-center space-x-3">
+            <span class="font-bold text-sm">图片对比与细节预览</span>
+            <span class="text-xs text-slate-400 font-mono">IMG_{{ lightbox.group?.timestamp }}</span>
+          </div>
+          <button @click="lightbox.show = false" class="text-slate-400 hover:text-white text-lg px-2">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="flex-1 p-6 overflow-auto custom-scrollbar flex flex-col md:flex-row items-center justify-center gap-6">
+          <!-- 当前图 -->
+          <div class="flex-1 flex flex-col items-center max-w-xl w-full">
+            <div class="text-xs font-bold px-3 py-1 rounded-lg mb-2 flex items-center gap-2" :class="getRoleTagClass(lightbox.currentFile?.role)">
+              <span>{{ lightbox.currentFile?.tag_short || lightbox.currentFile?.tag }}</span>
+              <span>({{ lightbox.currentFile?.resolution_str }} · {{ lightbox.currentFile?.size_str }})</span>
+            </div>
+            <div class="w-full aspect-[4/3] bg-black/60 rounded-2xl overflow-hidden border border-slate-700 flex items-center justify-center">
+              <img :src="lightbox.currentFile?.preview_url" class="max-w-full max-h-full object-contain">
+            </div>
+            <div class="mt-3 text-xs text-slate-300 font-mono break-all p-2 bg-slate-800/80 rounded-lg w-full text-center">
+              {{ lightbox.currentFile?.phone_path }}
+            </div>
+          </div>
+
+          <!-- 对比基准图 -->
+          <div v-if="lightbox.compareFile" class="flex-1 flex flex-col items-center max-w-xl w-full">
+            <div class="text-xs font-bold px-3 py-1 rounded-lg mb-2 flex items-center gap-2" :class="getRoleTagClass(lightbox.compareFile?.role)">
+              <span>{{ lightbox.compareFile?.tag_short || lightbox.compareFile?.tag }}</span>
+              <span>({{ lightbox.compareFile?.resolution_str }} · {{ lightbox.compareFile?.size_str }})</span>
+            </div>
+            <div class="w-full aspect-[4/3] bg-black/60 rounded-2xl overflow-hidden border border-slate-700 flex items-center justify-center">
+              <img :src="lightbox.compareFile?.preview_url" class="max-w-full max-h-full object-contain">
+            </div>
+            <div class="mt-3 text-xs text-slate-300 font-mono break-all p-2 bg-slate-800/80 rounded-lg w-full text-center">
+              {{ lightbox.compareFile?.phone_path }}
+            </div>
+          </div>
+        </div>
+
+        <div class="p-4 bg-slate-800/90 border-t border-slate-700 flex items-center justify-between text-xs text-slate-400">
+          <div>视觉比对说明：真实缩略图与原图相似度通常为 95%~100%；独立拍摄相片相似度通常低于 50%。</div>
+          <button @click="lightbox.show = false" class="px-4 py-1.5 rounded-xl bg-slate-700 text-white hover:bg-slate-600 transition">
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 3: 删除安全确认与物理执行 Modal -->
+    <div v-if="deleteModal.show" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
+        <div class="p-5 bg-rose-50 border-b border-rose-100 flex items-center justify-between">
+          <div class="flex items-center space-x-3 text-rose-700">
+            <div class="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center text-lg shadow-sm">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <div>
+              <h2 class="text-base font-bold text-slate-900">确认从手机中删除以下真实文件？</h2>
+              <p class="text-xs text-rose-600 font-medium">此操作将通过 ADB 直接执行 rm 指令，物理删除手机内部存储文件</p>
+            </div>
+          </div>
+          <button v-if="!isDeleting" @click="deleteModal.show = false" class="text-slate-400 hover:text-slate-600">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <div class="p-6 space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
+              <div class="text-xs text-slate-500">待删除真实文件</div>
+              <div class="text-xl font-extrabold text-rose-600 mt-1">{{ selectedFiles.length }} 张</div>
+            </div>
+            <div class="p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
+              <div class="text-xs text-slate-500">预计释放手机空间</div>
+              <div class="text-xl font-extrabold text-emerald-600 mt-1">{{ selectedSizeStr }}</div>
+            </div>
+          </div>
+
+          <div>
+            <div class="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
+              <span>待删除清单 (前 100 项)：</span>
+              <span class="text-slate-400">仅包含当前勾选项</span>
+            </div>
+            <div class="max-h-52 overflow-y-auto custom-scrollbar bg-slate-900 text-slate-300 p-3.5 rounded-2xl font-mono text-[11px] space-y-1.5 shadow-inner">
+              <div v-for="(f, i) in selectedFiles" :key="f.id" class="flex items-start justify-between text-rose-300 gap-2">
+                <span class="break-all flex-1">{{ i + 1 }}. {{ f.phone_path }}</span>
+                <span class="text-slate-400 shrink-0 font-bold">{{ f.size_str }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!isDeleting && !deleteModal.done">
+            <label class="flex items-start space-x-2.5 cursor-pointer p-3.5 bg-amber-50 rounded-2xl border border-amber-200">
+              <input 
+                type="checkbox" 
+                v-model="deleteModal.confirmed" 
+                class="mt-0.5 w-4 h-4 text-rose-600 rounded border-amber-300 focus:ring-rose-500 accent-rose-600 cursor-pointer"
+              >
+              <span class="text-xs text-amber-950 font-medium leading-relaxed">
+                我已仔细核对上述文件路径，确认通过 ADB 从手机中永久物理删除这些文件（原图与独立照片将安全保留在手机相册中）。
+              </span>
+            </label>
+          </div>
+
+          <div v-if="isDeleting" class="py-4 space-y-3">
+            <div class="flex items-center justify-between text-xs font-bold text-slate-700">
+              <span class="flex items-center space-x-2">
+                <i class="fa-solid fa-circle-notch fa-spin text-rose-600"></i>
+                <span>正在通过 ADB 执行真实删除操作...</span>
+              </span>
+              <span>{{ deleteModal.progress }}%</span>
+            </div>
+            <div class="w-full bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
+              <div class="bg-gradient-to-r from-red-600 to-rose-500 h-3 rounded-full transition-all duration-300" :style="{ width: deleteModal.progress + '%' }"></div>
+            </div>
+          </div>
+
+          <div v-if="deleteModal.done" class="p-5 bg-emerald-50 rounded-2xl border border-emerald-200 text-center space-y-2">
+            <div class="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto text-xl">
+              <i class="fa-solid fa-check"></i>
+            </div>
+            <div class="text-sm font-bold text-emerald-950">删除操作执行完毕！</div>
+            <p class="text-xs text-emerald-800">
+              已成功从手机物理删除 {{ deleteModal.result?.deleted_count }} 个文件，释放存储空间 {{ deleteModal.result?.freed_size_str }}。
+            </p>
+          </div>
+        </div>
+
+        <div class="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end space-x-3">
+          <button 
+            v-if="!isDeleting && !deleteModal.done"
+            @click="deleteModal.show = false" 
+            class="px-4 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition">
+            取消
+          </button>
+          <button 
+            v-if="!isDeleting && !deleteModal.done"
+            @click="executeDelete" 
+            :disabled="!deleteModal.confirmed"
+            class="px-5 py-2 rounded-xl text-xs font-bold text-white shadow-md transition-all"
+            :class="deleteModal.confirmed ? 'bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-rose-500/20' : 'bg-slate-300 cursor-not-allowed'">
+            确认永久删除
+          </button>
+          <button 
+            v-if="deleteModal.done"
+            @click="deleteModal.show = false" 
+            class="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition">
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const loading = ref(true);
+        const manifest = ref({ summary: {}, groups: [] });
+        const adbConnected = ref(false);
+        const currentDevice = ref('');
+        const activeTab = ref('all');
+        const searchQuery = ref('');
+        const isDeleting = ref(false);
+
+        // 扫描控制状态
+        const scanModal = ref({
+          show: false,
+          cleanCache: false,
+          threshold: 0.88
+        });
+
+        const scanStatus = ref({
+          is_scanning: false,
+          step: 'idle',
+          step_text: '空闲就绪',
+          progress: 0,
+          message: ''
+        });
+
+        const lightbox = ref({
+          show: false,
+          currentFile: null,
+          compareFile: null,
+          group: null
+        });
+
+        const deleteModal = ref({
+          show: false,
+          confirmed: false,
+          progress: 0,
+          done: false,
+          result: null
+        });
+
+        const summary = computed(() => manifest.value.summary || {});
+        const groups = computed(() => manifest.value.groups || []);
+
+        const selectedFiles = computed(() => {
+          const res = [];
+          for (const g of groups.value) {
+            for (const f of g.files) {
+              if (f.selected && !f.deleted) {
+                res.push(f);
+              }
+            }
+          }
+          return res;
+        });
+
+        const selectedCount = computed(() => selectedFiles.value.length);
+        const selectedSizeStr = computed(() => {
+          const totalBytes = selectedFiles.value.reduce((acc, f) => acc + (f.size_bytes || 0), 0);
+          if (totalBytes < 1024) return `${totalBytes} B`;
+          if (totalBytes < 1024 * 1024) return `${(totalBytes / 1024).toFixed(1)} KB`;
+          if (totalBytes < 1024 * 1024 * 1024) return `${(totalBytes / (1024 * 1024)).toFixed(2)} MB`;
+          return `${(totalBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+        });
+
+        const filterTabs = computed(() => {
+          let thumbCount = 0;
+          let qqCount = 0;
+          let diffCount = 0;
+
+          for (const g of groups.value) {
+            const bNames = g.badges.map(b => b.name);
+            if (bNames.includes('含缩略图')) thumbCount++;
+            if (bNames.includes('含QQ缓存')) qqCount++;
+            if (bNames.includes('含同名不同图(已保护)')) diffCount++;
+          }
+
+          return [
+            { id: 'all', name: '全部对比组', count: groups.value.length },
+            { id: 'thumb', name: '真实缩略图', icon: 'fa-solid fa-compress', count: thumbCount },
+            { id: 'qq', name: 'QQ图片缓存', icon: 'fa-solid fa-bolt', count: qqCount },
+            { id: 'diff', name: '同名不同图 (已保护)', icon: 'fa-solid fa-shield', count: diffCount },
+            { id: 'selected_only', name: '仅显示有勾选的组', count: groups.value.filter(g => g.files.some(f => f.selected && !f.deleted)).length }
+          ];
+        });
+
+        const filteredGroups = computed(() => {
+          return groups.value.filter(g => {
+            const bNames = g.badges.map(b => b.name);
+            if (activeTab.value === 'thumb' && !bNames.includes('含缩略图')) return false;
+            if (activeTab.value === 'qq' && !bNames.includes('含QQ缓存')) return false;
+            if (activeTab.value === 'diff' && !bNames.includes('含同名不同图(已保护)')) return false;
+            if (activeTab.value === 'selected_only' && !g.files.some(f => f.selected && !f.deleted)) return false;
+
+            if (searchQuery.value.trim()) {
+              const q = searchQuery.value.trim().toLowerCase();
+              const matchTs = g.timestamp.toLowerCase().includes(q);
+              const matchFiles = g.files.some(f => 
+                f.filename.toLowerCase().includes(q) || 
+                f.phone_path.toLowerCase().includes(q)
+              );
+              if (!matchTs && !matchFiles) return false;
+            }
+
+            return true;
+          });
+        });
+
+        const fetchData = async () => {
+          try {
+            loading.value = true;
+            const res = await fetch('/api/data');
+            const data = await res.json();
+            
+            for (const g of data.groups || []) {
+              for (const f of g.files || []) {
+                f.selected = f.deleted ? false : !!f.auto_select;
+              }
+            }
+            manifest.value = data;
+          } catch (e) {
+            console.error('Fetch error:', e);
+          } finally {
+            loading.value = false;
+          }
+        };
+
+        const fetchAdb = async () => {
+          try {
+            const res = await fetch('/api/adb_status');
+            const data = await res.json();
+            adbConnected.value = !!data.connected;
+            currentDevice.value = data.current_device || (data.devices && data.devices[0]?.serial) || '';
+          } catch (e) {
+            adbConnected.value = false;
+          }
+        };
+
+        // 触发扫描
+        const openScanModal = () => {
+          scanModal.value.show = true;
+        };
+
+        let scanPollTimer = null;
+        const triggerScan = async () => {
+          try {
+            scanStatus.value.is_scanning = true;
+            scanStatus.value.progress = 5;
+            scanStatus.value.step_text = '正在向手机发起扫描请求...';
+
+            const res = await fetch('/api/scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                clean_cache: scanModal.value.cleanCache,
+                threshold: scanModal.value.threshold
+              })
+            });
+            const data = await res.json();
+            if (!data.success) {
+              alert(data.error || '扫描启动失败');
+              scanStatus.value.is_scanning = false;
+              return;
+            }
+
+            // 轮询扫描进度
+            if (scanPollTimer) clearInterval(scanPollTimer);
+            scanPollTimer = setInterval(async () => {
+              try {
+                const sRes = await fetch('/api/scan_status');
+                const sData = await sRes.json();
+                scanStatus.value = sData;
+
+                if (!sData.is_scanning) {
+                  clearInterval(scanPollTimer);
+                  scanPollTimer = null;
+                  scanModal.value.show = false;
+                  // 重新加载数据
+                  await fetchData();
+                }
+              } catch (e) {
+                console.error('Poll status error:', e);
+              }
+            }, 800);
+
+          } catch (e) {
+            alert('扫描触发异常: ' + e);
+            scanStatus.value.is_scanning = false;
+          }
+        };
+
+        const resetToRecommended = () => {
+          for (const g of groups.value) {
+            for (const f of g.files) {
+              if (!f.deleted) {
+                f.selected = !!f.auto_select;
+              }
+            }
+          }
+        };
+
+        const selectAllThumbnails = () => {
+          for (const g of groups.value) {
+            for (const f of g.files) {
+              if (!f.deleted) {
+                if (f.role !== 'original' && f.role !== 'independent') {
+                  f.selected = true;
+                }
+              }
+            }
+          }
+        };
+
+        const invertSelection = () => {
+          for (const g of groups.value) {
+            for (const f of g.files) {
+              if (!f.deleted) {
+                f.selected = !f.selected;
+              }
+            }
+          }
+        };
+
+        const deselectAll = () => {
+          for (const g of groups.value) {
+            for (const f of g.files) {
+              f.selected = false;
+            }
+          }
+        };
+
+        const selectGroupThumbnails = (group) => {
+          for (const f of group.files) {
+            if (!f.deleted) {
+              f.selected = (f.role !== 'original' && f.role !== 'independent');
+            }
+          }
+        };
+
+        const selectGroupAll = (group) => {
+          for (const f of group.files) {
+            if (!f.deleted) f.selected = true;
+          }
+        };
+
+        const deselectGroupAll = (group) => {
+          for (const f of group.files) {
+            f.selected = false;
+          }
+        };
+
+        const resetFilters = () => {
+          activeTab.value = 'all';
+          searchQuery.value = '';
+        };
+
+        const getBadgeClass = (color) => {
+          switch (color) {
+            case 'red': return 'bg-rose-100 text-rose-700';
+            case 'orange': return 'bg-orange-100 text-orange-700';
+            case 'blue': return 'bg-blue-100 text-blue-700';
+            case 'yellow': return 'bg-amber-100 text-amber-700';
+            default: return 'bg-slate-100 text-slate-700';
+          }
+        };
+
+        const getRoleTagClass = (role) => {
+          switch (role) {
+            case 'original': return 'bg-emerald-100 text-emerald-800 border border-emerald-300';
+            case 'thumbnail': return 'bg-rose-100 text-rose-800 border border-rose-300';
+            case 'cache': return 'bg-orange-100 text-orange-800 border border-orange-300';
+            case 'independent': return 'bg-blue-100 text-blue-800 border border-blue-300';
+            case 'duplicate': return 'bg-amber-100 text-amber-800 border border-amber-300';
+            default: return 'bg-slate-100 text-slate-800 border border-slate-300';
+          }
+        };
+
+        const getRoleIcon = (role) => {
+          switch (role) {
+            case 'original': return 'fa-solid fa-crown text-emerald-600';
+            case 'thumbnail': return 'fa-solid fa-compress text-rose-600';
+            case 'cache': return 'fa-solid fa-bolt text-orange-600';
+            case 'independent': return 'fa-solid fa-shield text-blue-600';
+            case 'duplicate': return 'fa-solid fa-copy text-amber-600';
+            default: return 'fa-regular fa-file';
+          }
+        };
+
+        const openLightbox = (file, group) => {
+          lightbox.value.show = true;
+          lightbox.value.currentFile = file;
+          lightbox.value.group = group;
+
+          if (file.role === 'original') {
+            lightbox.value.compareFile = group.files.find(f => f.id !== file.id) || null;
+          } else {
+            lightbox.value.compareFile = group.files.find(f => f.role === 'original') || group.files.find(f => f.id !== file.id) || null;
+          }
+        };
+
+        const copyPath = (path) => {
+          navigator.clipboard.writeText(path);
+          alert('完整手机路径已复制到剪贴板:\n' + path);
+        };
+
+        const openDeleteModal = () => {
+          deleteModal.value.show = true;
+          deleteModal.value.confirmed = false;
+          deleteModal.value.done = false;
+          deleteModal.value.progress = 0;
+          deleteModal.value.result = null;
+        };
+
+        const executeDelete = async () => {
+          const pathsToDelete = selectedFiles.value.map(f => f.phone_path);
+          if (pathsToDelete.length === 0) return;
+
+          isDeleting.value = true;
+          deleteModal.value.progress = 30;
+
+          try {
+            const res = await fetch('/api/delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ phone_paths: pathsToDelete })
+            });
+
+            deleteModal.value.progress = 90;
+            const data = await res.json();
+            
+            deleteModal.value.progress = 100;
+            deleteModal.value.done = true;
+            deleteModal.value.result = data;
+
+            const deletedSet = new Set((data.deleted || []).map(d => d.path));
+            for (const g of groups.value) {
+              for (const f of g.files) {
+                if (deletedSet.has(f.phone_path)) {
+                  f.deleted = true;
+                  f.selected = false;
+                }
+              }
+            }
+          } catch (e) {
+            alert('删除执行失败: ' + e);
+          } finally {
+            isDeleting.value = false;
+          }
+        };
+
+        onMounted(() => {
+          fetchData();
+          fetchAdb();
+        });
+
+        return {
+          loading,
+          manifest,
+          summary,
+          groups,
+          adbConnected,
+          currentDevice,
+          activeTab,
+          searchQuery,
+          filterTabs,
+          filteredGroups,
+          selectedFiles,
+          selectedCount,
+          selectedSizeStr,
+          isDeleting,
+          scanModal,
+          scanStatus,
+          lightbox,
+          deleteModal,
+          fetchData,
+          openScanModal,
+          triggerScan,
+          resetToRecommended,
+          selectAllThumbnails,
+          invertSelection,
+          deselectAll,
+          selectGroupThumbnails,
+          selectGroupAll,
+          deselectGroupAll,
+          resetFilters,
+          getBadgeClass,
+          getRoleTagClass,
+          getRoleIcon,
+          openLightbox,
+          copyPath,
+          openDeleteModal,
+          executeDelete
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
